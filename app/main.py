@@ -3,6 +3,7 @@ from fastapi import Depends, FastAPI
 from app.db import init_db, resolve_db_path
 from app.deps import current_user_id
 from app.errors import register_error_handlers
+from app.routers import channels
 
 
 def create_app(db_path: str | None = None) -> FastAPI:
@@ -10,6 +11,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.db_path = resolve_db_path(db_path)
     init_db(app.state.db_path)
     register_error_handlers(app)
+
+    app.include_router(channels.router)
 
     @app.get("/health")
     def health():
