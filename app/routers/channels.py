@@ -28,6 +28,15 @@ def get_channel_or_404(conn: sqlite3.Connection, channel_id: int) -> sqlite3.Row
     return row
 
 
+def require_channel_writable(conn: sqlite3.Connection, channel_id: int) -> sqlite3.Row:
+    """Archived channels are read-only: every write (post, edit, delete, reply,
+    react) must call this first. Returns the channel row if writes are allowed."""
+    channel = get_channel_or_404(conn, channel_id)
+    if channel["archived_at"] is not None:
+        raise conflict(f"Channel {channel_id} is archived and read-only.")
+    return channel
+
+
 @router.post("", status_code=201)
 def create_channel(
     body: ChannelCreate,

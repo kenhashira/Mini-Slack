@@ -163,3 +163,31 @@ def test_delete_by_non_author_is_403(client):
 def test_delete_without_header_is_401(client):
     mid = post(client, make_channel(client)).json()["id"]
     assert client.delete(f"/messages/{mid}").status_code == 401
+
+
+def archived_channel_with_message(client):
+    cid = make_channel(client)
+    mid = post(client, cid, "old").json()["id"]
+    client.post(f"/channels/{cid}/archive", headers=ALICE)
+    return cid, mid
+
+
+def test_edit_in_archived_channel_is_409(client):
+    cid, mid = archived_channel_with_message(client)
+    r = client.patch(f"/messages/{mid}", json={"body": "new"}, headers=ALICE)
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "conflict"
+    assert history(client, cid).json()["messages"][0]["body"] == "old"
+
+
+def test_delete_in_archived_channel_is_409(client):
+    cid, mid = archived_channel_with_message(client)
+    r = client.delete(f"/messages/{mid}", headers=ALICE)
+    assert r.status_code == 409
+    assert len(history(client, cid).json()["messages"]) == 1
+
+
+def test_non_author_in_archived_channel_still_gets_403(client):
+    _, mid = archived_channel_with_message(client)
+    assert client.patch(f"/messages/{mid}", json={"body": "x"}, headers=BOB).status_code == 403
+    assert client.delete(f"/messages/{mid}", headers=BOB).status_code == 403

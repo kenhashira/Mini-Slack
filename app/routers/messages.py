@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Query, Response
 
 from app.db import get_db
 from app.deps import current_user
-from app.errors import conflict, forbidden, not_found
-from app.routers.channels import get_channel_or_404
+from app.errors import forbidden, not_found
+from app.routers.channels import get_channel_or_404, require_channel_writable
 from app.schemas import MessageCreate, MessageEdit
 
 router = APIRouter(tags=["messages"])
@@ -45,9 +45,7 @@ def post_message(
     user_id: str = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    channel = get_channel_or_404(conn, channel_id)
-    if channel["archived_at"] is not None:
-        raise conflict(f"Channel {channel_id} is archived; posting is not allowed.")
+    require_channel_writable(conn, channel_id)
     cur = conn.execute(
         "INSERT INTO messages (channel_id, user_id, body) VALUES (?, ?, ?)",
         (channel_id, user_id, body.body),
@@ -92,6 +90,7 @@ def edit_message(
     message = get_message_or_404(conn, message_id)
     if message["user_id"] != user_id:
         raise forbidden("Only the author can edit this message.")
+    require_channel_writable(conn, message["channel_id"])
     conn.execute(
         "UPDATE messages SET body = ?, edited_at = CURRENT_TIMESTAMP WHERE id = ?",
         (body.body, message_id),
@@ -109,6 +108,7 @@ def delete_message(
     message = get_message_or_404(conn, message_id)
     if message["user_id"] != user_id:
         raise forbidden("Only the author can delete this message.")
+    require_channel_writable(conn, message["channel_id"])
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))  # replies cascade
     conn.commit()
     return Response(status_code=204)
