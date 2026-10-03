@@ -16,3 +16,16 @@ ChannelName = Annotated[
 
 class ChannelCreate(BaseModel):
     name: ChannelName
+
+
+MessageBody = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
+]
+
+
+class MessageCreate(BaseModel):
+    body: MessageBody
+
+
+class MessageEdit(BaseModel):
+    body: MessageBody
