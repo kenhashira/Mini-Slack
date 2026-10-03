@@ -31,6 +31,37 @@ def message_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def serialize_messages(
+    conn: sqlite3.Connection, rows: list[sqlite3.Row], user_id: str
+) -> list[dict]:
+    """Message dicts plus reactions grouped by emoji (count, and whether `user_id` reacted).
+    One query covers all messages, so a page of 50 does not cost 50 queries."""
+    messages = [message_dict(r) for r in rows]
+    for m in messages:
+        m["reactions"] = []
+    if not messages:
+        return messages
+    by_id = {m["id"]: m for m in messages}
+    placeholders = ",".join("?" * len(by_id))
+    grouped = conn.execute(
+        f"""SELECT message_id, emoji, COUNT(*) AS count,
+                   MAX(user_id = ?) AS reacted
+            FROM reactions WHERE message_id IN ({placeholders})
+            GROUP BY message_id, emoji
+            ORDER BY MIN(rowid)""",  # emoji appear in the order they were first used
+        [user_id, *by_id],
+    ).fetchall()
+    for g in grouped:
+        by_id[g["message_id"]]["reactions"].append(
+            {"emoji": g["emoji"], "count": g["count"], "reacted": bool(g["reacted"])}
+        )
+    return messages
+
+
+def serialize_message(conn: sqlite3.Connection, row: sqlite3.Row, user_id: str) -> dict:
+    return serialize_messages(conn, [row], user_id)[0]
+
+
 def get_message_or_404(conn: sqlite3.Connection, message_id: int) -> sqlite3.Row:
     row = conn.execute(MESSAGE_SELECT + " WHERE m.id = ?", (message_id,)).fetchone()
     if row is None:
@@ -51,7 +82,7 @@ def post_message(
         (channel_id, user_id, body.body),
     )
     conn.commit()
-    return message_dict(get_message_or_404(conn, cur.lastrowid))
+    return serialize_message(conn, get_message_or_404(conn, cur.lastrowid), user_id)
 
 
 @router.get("/channels/{channel_id}/messages")
@@ -75,7 +106,7 @@ def list_messages(
     has_more = len(rows) > limit
     rows = rows[:limit]
     return {
-        "messages": [message_dict(r) for r in rows],
+        "messages": serialize_messages(conn, rows, user_id),
         "next_before": rows[-1]["id"] if has_more else None,
     }
 
@@ -96,7 +127,7 @@ def edit_message(
         (body.body, message_id),
     )
     conn.commit()
-    return message_dict(get_message_or_404(conn, message_id))
+    return serialize_message(conn, get_message_or_404(conn, message_id), user_id)
 
 
 @router.delete("/messages/{message_id}", status_code=204)
@@ -136,7 +167,7 @@ def post_reply(
         (parent["channel_id"], user_id, message_id, body.body),
     )
     conn.commit()
-    return message_dict(get_message_or_404(conn, cur.lastrowid))
+    return serialize_message(conn, get_message_or_404(conn, cur.lastrowid), user_id)
 
 
 @router.get("/messages/{message_id}/replies")
@@ -161,6 +192,6 @@ def list_replies(
     has_more = len(rows) > limit
     rows = rows[:limit]
     return {
-        "replies": [message_dict(r) for r in rows],
+        "replies": serialize_messages(conn, rows, user_id),
         "next_after": rows[-1]["id"] if has_more else None,
     }

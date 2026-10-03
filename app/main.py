@@ -3,7 +3,7 @@ from fastapi import Depends, FastAPI
 from app.db import init_db, resolve_db_path
 from app.deps import current_user_id
 from app.errors import register_error_handlers
-from app.routers import channels, messages
+from app.routers import channels, messages, reactions
 
 
 def create_app(db_path: str | None = None) -> FastAPI:
@@ -14,6 +14,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     app.include_router(channels.router)
     app.include_router(messages.router)
+    app.include_router(reactions.router)
 
     @app.get("/health")
     def health():

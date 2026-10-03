@@ -23,6 +23,13 @@ MessageBody = Annotated[
 ]
 
 
+Emoji = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+
+
+class ReactionCreate(BaseModel):
+    emoji: Emoji
+
+
 class MessageCreate(BaseModel):
     body: MessageBody
 
