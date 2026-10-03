@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t mini-slack:ci .
+
+      - name: Run container
+        run: docker run -d --name mini-slack -p 8000:8000 mini-slack:ci
+
+      - name: Wait for /health to return 200
+        run: bash scripts/wait-for-health.sh http://localhost:8000/health 30
+
+      - name: Container runs as non-root
+        run: |
+          uid="$(docker exec mini-slack id -u)"
+          echo "container uid: $uid"
+          test "$uid" != "0"
+
+      - name: Container can write its database to /data
+        run: |
+          # Creating a channel forces a real write; the file must exist in /data afterwards.
+          curl -fsS -X POST http://localhost:8000/channels \
+            -H 'X-User-Id: ci' -H 'Content-Type: application/json' \
+            -d '{"name":"ci-check"}'
+          echo
+          docker exec mini-slack ls -l /data/mini_slack.db
+
+      - name: Data survives a container restart
+        run: |
+          docker restart mini-slack
+          bash scripts/wait-for-health.sh http://localhost:8000/health 30
+          curl -fsS http://localhost:8000/channels -H 'X-User-Id: ci' | grep -q '"ci-check"'
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs mini-slack
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f mini-slack

@@ -1,0 +1,26 @@
+# Keep the build context (and the image) small and free of local state or secrets.
+.git
+.gitignore
+.gitattributes
+.github
+.claude
+.venv
+venv
+env
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+tests
+scripts
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+.env
+.env.*
+.vscode
+.idea
+README.md
+LICENSE
