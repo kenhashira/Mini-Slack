@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 
 from app.db import get_db
 from app.deps import current_user
-from app.errors import conflict, not_found
-from app.schemas import ChannelCreate
+from app.errors import AppError, conflict, not_found
+from app.schemas import ChannelCreate, MarkRead
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 
@@ -59,11 +59,79 @@ def list_channels(
     user_id: str = Depends(current_user),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    sql = "SELECT * FROM channels"
+    # Unread = top-level messages from other people, newer than this user's read marker.
+    # No marker row (channel never opened) counts as marker 0, i.e. everything is unread.
+    sql = """
+        SELECT c.*,
+               (SELECT COUNT(*) FROM messages m
+                WHERE m.channel_id = c.id AND m.parent_id IS NULL
+                  AND m.user_id != :user
+                  AND m.id > COALESCE((SELECT last_read_message_id FROM read_markers rm
+                                       WHERE rm.user_id = :user AND rm.channel_id = c.id), 0)
+               ) AS unread_count
+        FROM channels c
+    """
     if not include_archived:
-        sql += " WHERE archived_at IS NULL"
-    rows = conn.execute(sql + " ORDER BY name").fetchall()
-    return {"channels": [channel_dict(r) for r in rows]}
+        sql += " WHERE c.archived_at IS NULL"
+    rows = conn.execute(sql + " ORDER BY c.name", {"user": user_id}).fetchall()
+    return {"channels": [{**channel_dict(r), "unread_count": r["unread_count"]} for r in rows]}
+
+
+def unread_count(conn: sqlite3.Connection, channel_id: int, user_id: str) -> int:
+    return conn.execute(
+        """SELECT COUNT(*) FROM messages m
+           WHERE m.channel_id = :channel AND m.parent_id IS NULL AND m.user_id != :user
+             AND m.id > COALESCE((SELECT last_read_message_id FROM read_markers
+                                  WHERE user_id = :user AND channel_id = :channel), 0)""",
+        {"channel": channel_id, "user": user_id},
+    ).fetchone()[0]
+
+
+@router.post("/{channel_id}/read")
+def mark_read(
+    channel_id: int,
+    body: MarkRead | None = None,
+    user_id: str = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Move the caller's read marker forward to `message_id` (default: newest top-level
+    message). It never moves backward. Allowed in archived channels: not a content change."""
+    get_channel_or_404(conn, channel_id)
+    message_id = body.message_id if body else None
+    if message_id is None:
+        message_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM messages WHERE channel_id = ? AND parent_id IS NULL",
+            (channel_id,),
+        ).fetchone()[0]
+    else:
+        msg = conn.execute(
+            "SELECT channel_id, parent_id FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if msg is None:
+            raise not_found(f"Message {message_id} not found.")
+        if msg["channel_id"] != channel_id:
+            raise AppError(422, "validation_error", f"Message {message_id} is not in channel {channel_id}.")
+        if msg["parent_id"] is not None:
+            raise AppError(422, "validation_error", "Mark a top-level message as read, not a reply.")
+    # MAX() makes the marker forward-only. The stored number has no foreign key to
+    # messages, so deleting the message it points at leaves the marker intact.
+    conn.execute(
+        """INSERT INTO read_markers (user_id, channel_id, last_read_message_id)
+           VALUES (?, ?, ?)
+           ON CONFLICT (user_id, channel_id) DO UPDATE SET
+               last_read_message_id = MAX(last_read_message_id, excluded.last_read_message_id)""",
+        (user_id, channel_id, message_id),
+    )
+    conn.commit()
+    marker = conn.execute(
+        "SELECT last_read_message_id FROM read_markers WHERE user_id = ? AND channel_id = ?",
+        (user_id, channel_id),
+    ).fetchone()[0]
+    return {
+        "channel_id": channel_id,
+        "last_read_message_id": marker,
+        "unread_count": unread_count(conn, channel_id, user_id),
+    }
 
 
 @router.post("/{channel_id}/archive")

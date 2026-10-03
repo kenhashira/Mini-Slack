@@ -1,7 +1,7 @@
 """Request bodies. Response bodies are plain dicts built in the routers."""
 from typing import Annotated
 
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 ChannelName = Annotated[
     str,
@@ -21,6 +21,10 @@ class ChannelCreate(BaseModel):
 MessageBody = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
 ]
+
+
+class MarkRead(BaseModel):
+    message_id: int | None = Field(default=None, ge=1)
 
 
 Emoji = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
