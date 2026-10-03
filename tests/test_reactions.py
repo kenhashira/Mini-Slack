@@ -224,6 +224,27 @@ def test_remove_multi_codepoint_emoji_with_url_encoding(client):
     assert history(client, cid)[0]["reactions"] == []
 
 
+def test_emoji_sent_as_json_unicode_escapes_is_stored_as_the_real_emoji(client):
+    import json
+
+    cid = make_channel(client)
+    mid = post(client, cid)
+    # json.dumps escapes non-ASCII by default, so this body is plain ASCII on the wire:
+    # (the emoji becomes a backslash-u surrogate pair). Many clients and curl commands send it this way.
+    payload = json.dumps({"emoji": "👍"})
+    assert "\\ud83d" in payload
+    r = client.post(
+        f"/messages/{mid}/reactions",
+        content=payload,
+        headers={**BOB, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 201
+    assert r.json()["reactions"][0]["emoji"] == "👍"
+    # It matches the same emoji sent raw, and removes cleanly via the percent-encoded query.
+    assert react(client, mid, "👍").status_code == 409
+    assert raw_delete(client, mid, "%F0%9F%91%8D").status_code == 204
+
+
 def test_plus_in_shortcode_must_be_encoded_as_percent_2b(client):
     # In a query string a bare '+' means a space, so ":+1:" has to be sent as ":%2B1:".
     cid = make_channel(client)
