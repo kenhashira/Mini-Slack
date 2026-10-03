@@ -1,0 +1,27 @@
+# Databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Secrets / environment
+.env
+.env.*
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
