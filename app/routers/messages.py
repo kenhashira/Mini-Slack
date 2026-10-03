@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, Response
 
 from app.db import get_db
 from app.deps import current_user
-from app.errors import forbidden, not_found
+from app.errors import AppError, forbidden, not_found
 from app.routers.channels import get_channel_or_404, require_channel_writable
 from app.schemas import MessageCreate, MessageEdit
 
@@ -112,3 +112,55 @@ def delete_message(
     conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))  # replies cascade
     conn.commit()
     return Response(status_code=204)
+
+
+def get_thread_parent(conn: sqlite3.Connection, message_id: int) -> sqlite3.Row:
+    """The message a thread hangs off. Threads are one level deep, so it must be top-level."""
+    parent = get_message_or_404(conn, message_id)
+    if parent["parent_id"] is not None:
+        raise AppError(422, "validation_error", "Replies cannot have replies; reply to the thread's top message.")
+    return parent
+
+
+@router.post("/messages/{message_id}/replies", status_code=201)
+def post_reply(
+    message_id: int,
+    body: MessageCreate,
+    user_id: str = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    parent = get_thread_parent(conn, message_id)
+    require_channel_writable(conn, parent["channel_id"])
+    cur = conn.execute(
+        "INSERT INTO messages (channel_id, user_id, parent_id, body) VALUES (?, ?, ?, ?)",
+        (parent["channel_id"], user_id, message_id, body.body),
+    )
+    conn.commit()
+    return message_dict(get_message_or_404(conn, cur.lastrowid))
+
+
+@router.get("/messages/{message_id}/replies")
+def list_replies(
+    message_id: int,
+    limit: int = Query(50, ge=1, le=100),
+    after: int | None = Query(None, ge=1),
+    user_id: str = Depends(current_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Replies in a thread, oldest first (the way a conversation reads).
+    Pass next_after back as `after` for the next page."""
+    get_thread_parent(conn, message_id)
+    sql = MESSAGE_SELECT + " WHERE m.parent_id = ?"
+    params: list = [message_id]
+    if after is not None:
+        sql += " AND m.id > ?"
+        params.append(after)
+    sql += " ORDER BY m.id ASC LIMIT ?"
+    params.append(limit + 1)
+    rows = conn.execute(sql, params).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return {
+        "replies": [message_dict(r) for r in rows],
+        "next_after": rows[-1]["id"] if has_more else None,
+    }
