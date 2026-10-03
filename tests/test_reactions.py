@@ -197,3 +197,38 @@ def test_remove_applies_the_same_emoji_rules_as_add(client):
     react(client, mid, "👍")
     assert unreact(client, mid, "x" * 65).status_code == 422
     assert unreact(client, mid, "  👍  ").status_code == 204  # trimmed, so it matches
+
+
+def raw_delete(client, mid, encoded_emoji, headers=BOB):
+    """DELETE with a hand-encoded query string, the way curl or a browser would send it."""
+    return client.delete(f"/messages/{mid}/reactions?emoji={encoded_emoji}", headers=headers)
+
+
+def test_remove_a_real_emoji_with_url_encoding(client):
+    cid = make_channel(client)
+    mid = post(client, cid)
+    react(client, mid, "👍")
+    assert raw_delete(client, mid, "%F0%9F%91%8D").status_code == 204  # thumbs-up as UTF-8 percent-encoding
+    assert history(client, cid)[0]["reactions"] == []
+
+
+def test_remove_multi_codepoint_emoji_with_url_encoding(client):
+    from urllib.parse import quote
+
+    cid = make_channel(client)
+    mid = post(client, cid)
+    # A skin-tone modifier and a ZWJ family sequence are several code points each.
+    for emoji in ["👍🏽", "👨‍👩‍👧"]:
+        react(client, mid, emoji)
+        assert raw_delete(client, mid, quote(emoji)).status_code == 204, emoji
+    assert history(client, cid)[0]["reactions"] == []
+
+
+def test_plus_in_shortcode_must_be_encoded_as_percent_2b(client):
+    # In a query string a bare '+' means a space, so ":+1:" has to be sent as ":%2B1:".
+    cid = make_channel(client)
+    mid = post(client, cid)
+    react(client, mid, ":+1:")
+    assert raw_delete(client, mid, ":+1:").status_code == 404  # bare + was read as a space
+    assert raw_delete(client, mid, ":%2B1:").status_code == 204
+    assert history(client, cid)[0]["reactions"] == []
